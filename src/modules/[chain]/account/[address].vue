@@ -51,22 +51,46 @@ const totalAmountByCategory = computed(() => {
   rewards.value?.total?.forEach((x) => {
     sumRew += Number(x.amount);
   });
-  let sumBal = 0;
-  // Use spendable balances for vesting accounts, regular balances for others
-  const balancesToUse = isVestingAccount.value ? spendableBalances.value : balances.value;
-  balancesToUse?.forEach((x) => {
-    sumBal += Number(x.amount);
-  });
   let sumUn = 0;
   unbonding.value?.forEach((x) => {
     x.entries?.forEach((y) => {
       sumUn += Number(y.balance);
     });
   });
-  return [sumBal, sumDel, sumRew, sumUn];
+  
+  // For vesting accounts, split balance into locked and unlocked
+  if (isVestingAccount.value) {
+    let sumSpendable = 0;
+    let sumLocked = 0;
+    
+    spendableBalances.value?.forEach((spendableItem, index) => {
+      const totalItem = balances.value[index];
+      if (totalItem) {
+        const spendableAmount = Number(spendableItem.amount);
+        const totalAmount = Number(totalItem.amount);
+        sumSpendable += spendableAmount;
+        sumLocked += (totalAmount - spendableAmount);
+      }
+    });
+    
+    return [sumSpendable, sumLocked, sumDel, sumRew, sumUn];
+  } else {
+    // For regular accounts, show total balance
+    let sumBal = 0;
+    balances.value?.forEach((x) => {
+      sumBal += Number(x.amount);
+    });
+    return [sumBal, sumDel, sumRew, sumUn];
+  }
 });
 
-const labels = ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+const labels = computed(() => {
+  if (isVestingAccount.value) {
+    return ['Liquid', 'Vesting', 'Delegation', 'Reward', 'Unbonding'];
+  } else {
+    return ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+  }
+});
 
 const totalAmount = computed(() => {
   return totalAmountByCategory.value.reduce((p, c) => c + p, 0);
@@ -94,7 +118,35 @@ const totalValue = computed(() => {
 
 // Calculate vesting percentage for vesting accounts
 const vestingPercentage = computed(() => {
-  if (!isVestingAccount.value || balances.value.length === 0 || spendableBalances.value.length === 0) {
+  if (!isVestingAccount.value || !account.value) {
+    return 0;
+  }
+  
+  // For vesting accounts, calculate based on original vesting schedule and time
+  if (account.value.vesting_account) {
+    const vestingAccount = account.value.vesting_account;
+    const currentTime = Math.floor(Date.now() / 1000); // Current timestamp in seconds
+    const startTime = Number(vestingAccount.start_time || 0);
+    const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
+    const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+    
+    if (originalVesting === 0 || startTime >= endTime) return 0;
+    
+    // Calculate vesting progress based on time (not current balances)
+    if (currentTime <= startTime) {
+      return 0; // Vesting hasn't started
+    } else if (currentTime >= endTime) {
+      return 100; // Vesting completed
+    } else {
+      // Linear vesting progress
+      const vestedTime = currentTime - startTime;
+      const totalVestingTime = endTime - startTime;
+      return (vestedTime / totalVestingTime) * 100;
+    }
+  }
+  
+  // Fallback for other vesting account types - use balance comparison
+  if (balances.value.length === 0 || spendableBalances.value.length === 0) {
     return 0;
   }
   const totalAmount = Number(balances.value[0]?.amount || 0);
@@ -103,6 +155,33 @@ const vestingPercentage = computed(() => {
   if (totalAmount === 0) return 0;
   
   return (spendableAmount / totalAmount) * 100;
+});
+
+// Calculate theoretical vested amount based on vesting schedule (time-based)
+const theoreticalVestedAmount = computed(() => {
+  if (!isVestingAccount.value || !account.value?.vesting_account) {
+    return 0;
+  }
+  
+  const vestingAccount = account.value.vesting_account;
+  const currentTime = Math.floor(Date.now() / 1000);
+  const startTime = Number(vestingAccount.start_time || 0);
+  const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
+  const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+  
+  if (originalVesting === 0 || startTime >= endTime) return 0;
+  
+  // Calculate what should be vested based on time
+  if (currentTime <= startTime) {
+    return 0; // Vesting hasn't started
+  } else if (currentTime >= endTime) {
+    return originalVesting; // Vesting completed
+  } else {
+    // Linear vesting progress
+    const vestedTime = currentTime - startTime;
+    const totalVestingTime = endTime - startTime;
+    return Math.floor(originalVesting * (vestedTime / totalVestingTime));
+  }
 });
 
 function loadAccount(address: string) {
@@ -193,14 +272,16 @@ function detectVestingAccount(account: AuthAccount): boolean {
         <div class="flex flex-1 flex-col truncate pl-4">
           <h2 class="text-sm card-title">
             {{ $t('account.address') }}:
-            <span v-if="isVestingAccount" class="ml-2 badge badge-warning badge-sm">
-              <Icon icon="mdi-lock-clock" class="mr-1" size="12" />
-              Vesting Account
-            </span>
           </h2>
           <span class="text-xs truncate"> {{ address }}</span>
           <span v-if="isVestingAccount" class="text-xs text-warning mt-1">
-            This account has tokens that vest over time
+            <span class="badge badge-warning badge-sm mr-2">
+              <Icon icon="mdi-lock-clock" class="mr-1" size="12" />
+              Vesting Account
+              <div class="tooltip tooltip-right" data-tip="This account has tokens that vest over time">
+                <Icon icon="mdi-information" class="ml-1 opacity-60" size="10" />
+              </div>
+            </span>
           </span>
         </div>
       </div>
@@ -242,9 +323,9 @@ function detectVestingAccount(account: AuthAccount): boolean {
           <!-- list-->
           <div class="">
             <!--balances  -->
-            <!-- For vesting accounts, show total, spendable, and locked balances -->
+            <!-- For vesting accounts, show liquid and locked balances -->
             <template v-if="isVestingAccount">
-              <!-- Total Balance (same styling as regular accounts, but with descriptive text) -->
+              <!-- Total Balance (Liquid + Locked) -->
               <div
                 class="flex items-center px-4 mb-2"
                 v-for="(balanceItem, index) in balances"
@@ -263,7 +344,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
                     {{ format.formatToken(balanceItem) }} <span class="text-xs opacity-75">(Total)</span>
                   </div>
                   <div class="text-xs opacity-75">
-                    Total tokens in account (locked + unlocked)
+                    All tokens currently in this account
                   </div>
                 </div>
                 <div
@@ -276,39 +357,39 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 </div>
               </div>
               
-              <!-- Spendable Balance (Unlocked) -->
+              <!-- Liquid Balance (What's spendable now) -->
               <div
                 class="flex items-center px-4 mb-2"
                 v-for="(spendableItem, index) in spendableBalances"
-                :key="'spendable-' + index"
+                :key="'liquid-' + index"
               >
                 <div
                   class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
                 >
-                  <Icon icon="mdi-account-cash" class="text-success" size="20" />
+                  <Icon icon="mdi-water" class="text-success" size="20" />
                   <div
                     class="absolute top-0 bottom-0 left-0 right-0 bg-success opacity-20"
                   ></div>
                 </div>
                 <div class="flex-1">
                   <div class="text-sm font-semibold">
-                    {{ format.formatToken(spendableItem) }} <span class="text-xs text-success">(Spendable)</span>
+                    {{ format.formatToken(spendableItem) }} <span class="text-xs text-success">(Liquid)</span>
                   </div>
                   <div class="text-xs text-success">
-                    Available for transfer/delegation
+                    Available for transfer/delegation now
                   </div>
                 </div>
                 <div
-                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-success dark:invert mr-2"
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
                 >
                   <span
-                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-success dark:invert text-sm"
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
                   ></span>
                   ${{ format.tokenValue(spendableItem) }}                
                 </div>
               </div>
               
-              <!-- Locked Balance (Total - Spendable) -->
+              <!-- Locked Balance (Still Vesting) -->
               <div
                 class="flex items-center px-4 mb-2"
                 v-for="(balanceItem, index) in balances"
@@ -327,20 +408,58 @@ function detectVestingAccount(account: AuthAccount): boolean {
                     {{ format.formatToken({
                       amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
                       denom: balanceItem.denom
-                    }) }} <span class="text-xs text-warning">(Locked)</span>
+                    }) }} <span class="text-xs text-warning">Vesting (Locked)</span>
                   </div>
                   <div class="text-xs text-warning">
-                    Tokens still vesting, will unlock over time
+                    Still vesting, will unlock over time
                   </div>
                 </div>
                 <div
-                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-warning dark:invert mr-2"
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
                 >
                   <span
-                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-warning dark:invert text-sm"
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
                   ></span>
                   ${{ format.tokenValue({
                       amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
+                      denom: balanceItem.denom
+                    }) }}                
+                </div>
+              </div>
+              
+              <!-- Unlocked/Vesting (Theoretical vested amount based on time) -->
+              <div
+                class="flex items-center px-4 mb-2"
+                v-for="(balanceItem, index) in balances"
+                :key="'unlocked-' + index"
+              >
+                <div
+                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                >
+                  <Icon icon="mdi-clock-check" class="text-info" size="20" />
+                  <div
+                    class="absolute top-0 bottom-0 left-0 right-0 bg-info opacity-20"
+                  ></div>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">
+                    {{ format.formatToken({
+                      amount: String(theoreticalVestedAmount),
+                      denom: balanceItem.denom
+                    }) }} <span class="text-xs text-info">Vested (Unlocked)</span>
+                  </div>
+                  <div class="text-xs text-info">
+                    Made spendable by vesting schedule, may have been utilized
+                  </div>
+                </div>
+                <div
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
+                >
+                  <span
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
+                  ></span>
+                  ${{ format.tokenValue({
+                      amount: String(theoreticalVestedAmount),
                       denom: balanceItem.denom
                     }) }}                
                 </div>

@@ -33,6 +33,8 @@ const txs = ref({} as TxResponse[]);
 const delegations = ref([] as Delegation[]);
 const rewards = ref({} as DelegatorRewards);
 const balances = ref([] as Coin[]);
+const spendableBalances = ref([] as Coin[]);
+const isVestingAccount = ref(false);
 const recentReceived = ref([] as TxResponse[]);
 const unbonding = ref([] as UnbondingResponses[]);
 const unbondingTotal = ref(0);
@@ -50,7 +52,9 @@ const totalAmountByCategory = computed(() => {
     sumRew += Number(x.amount);
   });
   let sumBal = 0;
-  balances.value?.forEach((x) => {
+  // Use spendable balances for vesting accounts, regular balances for others
+  const balancesToUse = isVestingAccount.value ? spendableBalances.value : balances.value;
+  balancesToUse?.forEach((x) => {
     sumBal += Number(x.amount);
   });
   let sumUn = 0;
@@ -76,6 +80,7 @@ const totalValue = computed(() => {
   rewards.value?.total?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
+  // Always use total balances for value calculation, regardless of vesting account status
   balances.value?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
@@ -87,10 +92,25 @@ const totalValue = computed(() => {
   return format.formatNumber(value, '0,0.00');
 });
 
+// Calculate vesting percentage for vesting accounts
+const vestingPercentage = computed(() => {
+  if (!isVestingAccount.value || balances.value.length === 0 || spendableBalances.value.length === 0) {
+    return 0;
+  }
+  const totalAmount = Number(balances.value[0]?.amount || 0);
+  const spendableAmount = Number(spendableBalances.value[0]?.amount || 0);
+  
+  if (totalAmount === 0) return 0;
+  
+  return (spendableAmount / totalAmount) * 100;
+});
 
 function loadAccount(address: string) {
   blockchain.rpc.getAuthAccount(address).then((x) => {
     account.value = x.account;
+    
+    // Detect if this is a vesting account
+    isVestingAccount.value = detectVestingAccount(x.account);
   });
   blockchain.rpc.getTxsBySender(address).then((x) => {
     txs.value = x.tx_responses;
@@ -103,6 +123,17 @@ function loadAccount(address: string) {
   });
   blockchain.rpc.getBankBalances(address).then((x) => {
     balances.value = x.balances;
+    
+    // If this is a vesting account, also load spendable balances
+    if (isVestingAccount.value) {
+      blockchain.rpc.getBankSpendableBalances(address).then((spendableResponse) => {
+        spendableBalances.value = spendableResponse.balances;
+      }).catch((error) => {
+        console.warn('Failed to load spendable balances:', error);
+        // Fallback to regular balances if spendable balances fail
+        spendableBalances.value = x.balances;
+      });
+    }
   });
   blockchain.rpc.getStakingDelegatorUnbonding(address).then((x) => {
     unbonding.value = x.unbonding_responses;
@@ -129,6 +160,14 @@ function mapAmount(events:{type: string, attributes: {key: string, value: string
     .filter(x => x.key === 'YW1vdW50'|| x.key === `amount`)
     .map(x => x.key==='amount'? x.value : String.fromCharCode(...fromBase64(x.value)))
 }
+
+// Helper function to detect vesting account types
+function detectVestingAccount(account: AuthAccount): boolean {
+  const accountType = account['@type'] || '';
+  return accountType.includes('VestingAccount') || 
+         accountType.includes('EthOwnedContinuousVestingAccount') ||
+         accountType.includes('EthOwnedMultiContinuousVestingAccount');
+}
 </script>
 <template>
   <div v-if="account">
@@ -152,8 +191,17 @@ function mapAmount(events:{type: string, attributes: {key: string, value: string
         </div>
         <!-- content -->
         <div class="flex flex-1 flex-col truncate pl-4">
-          <h2 class="text-sm card-title">{{ $t('account.address') }}:</h2>
+          <h2 class="text-sm card-title">
+            {{ $t('account.address') }}:
+            <span v-if="isVestingAccount" class="ml-2 badge badge-warning badge-sm">
+              <Icon icon="mdi-lock-clock" class="mr-1" size="12" />
+              Vesting Account
+            </span>
+          </h2>
           <span class="text-xs truncate"> {{ address }}</span>
+          <span v-if="isVestingAccount" class="text-xs text-warning mt-1">
+            This account has tokens that vest over time
+          </span>
         </div>
       </div>
     </div>
@@ -194,36 +242,144 @@ function mapAmount(events:{type: string, attributes: {key: string, value: string
           <!-- list-->
           <div class="">
             <!--balances  -->
-            <div
-              class="flex items-center px-4 mb-2"
-              v-for="(balanceItem, index) in balances"
-              :key="index"
-            >
+            <!-- For vesting accounts, show total, spendable, and locked balances -->
+            <template v-if="isVestingAccount">
+              <!-- Total Balance (same styling as regular accounts, but with descriptive text) -->
               <div
-                class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                class="flex items-center px-4 mb-2"
+                v-for="(balanceItem, index) in balances"
+                :key="'total-' + index"
               >
-                <Icon icon="mdi-account-cash" class="text-info" size="20" />
                 <div
-                  class="absolute top-0 bottom-0 left-0 right-0 bg-info opacity-20"
-                ></div>
-              </div>
-              <div class="flex-1">
-                <div class="text-sm font-semibold">
-                  {{ format.formatToken(balanceItem) }}
+                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                >
+                  <Icon icon="mdi-account-cash" class="text-info" size="20" />
+                  <div
+                    class="absolute top-0 bottom-0 left-0 right-0 bg-info opacity-20"
+                  ></div>
                 </div>
-                <div class="text-xs">
-                  {{ format.calculatePercent(balanceItem.amount, totalAmount) }}
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">
+                    {{ format.formatToken(balanceItem) }} <span class="text-xs opacity-75">(Total)</span>
+                  </div>
+                  <div class="text-xs opacity-75">
+                    Total tokens in account (locked + unlocked)
+                  </div>
+                </div>
+                <div
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
+                >
+                  <span
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
+                  ></span>
+                  ${{ format.tokenValue(balanceItem) }}                
                 </div>
               </div>
+              
+              <!-- Spendable Balance (Unlocked) -->
               <div
-                class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
+                class="flex items-center px-4 mb-2"
+                v-for="(spendableItem, index) in spendableBalances"
+                :key="'spendable-' + index"
               >
-                <span
-                  class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
-                ></span>
-                ${{ format.tokenValue(balanceItem) }}                
+                <div
+                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                >
+                  <Icon icon="mdi-account-cash" class="text-success" size="20" />
+                  <div
+                    class="absolute top-0 bottom-0 left-0 right-0 bg-success opacity-20"
+                  ></div>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">
+                    {{ format.formatToken(spendableItem) }} <span class="text-xs text-success">(Spendable)</span>
+                  </div>
+                  <div class="text-xs text-success">
+                    Available for transfer/delegation
+                  </div>
+                </div>
+                <div
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-success dark:invert mr-2"
+                >
+                  <span
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-success dark:invert text-sm"
+                  ></span>
+                  ${{ format.tokenValue(spendableItem) }}                
+                </div>
               </div>
-            </div>
+              
+              <!-- Locked Balance (Total - Spendable) -->
+              <div
+                class="flex items-center px-4 mb-2"
+                v-for="(balanceItem, index) in balances"
+                :key="'locked-' + index"
+              >
+                <div
+                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                >
+                  <Icon icon="mdi-lock" class="text-warning" size="20" />
+                  <div
+                    class="absolute top-0 bottom-0 left-0 right-0 bg-warning opacity-20"
+                  ></div>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">
+                    {{ format.formatToken({
+                      amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
+                      denom: balanceItem.denom
+                    }) }} <span class="text-xs text-warning">(Locked)</span>
+                  </div>
+                  <div class="text-xs text-warning">
+                    Tokens still vesting, will unlock over time
+                  </div>
+                </div>
+                <div
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-warning dark:invert mr-2"
+                >
+                  <span
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-warning dark:invert text-sm"
+                  ></span>
+                  ${{ format.tokenValue({
+                      amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
+                      denom: balanceItem.denom
+                    }) }}                
+                </div>
+              </div>
+            </template>
+            
+            <!-- For regular accounts, show normal balances -->
+            <template v-else>
+              <div
+                class="flex items-center px-4 mb-2"
+                v-for="(balanceItem, index) in balances"
+                :key="index"
+              >
+                <div
+                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
+                >
+                  <Icon icon="mdi-account-cash" class="text-info" size="20" />
+                  <div
+                    class="absolute top-0 bottom-0 left-0 right-0 bg-info opacity-20"
+                  ></div>
+                </div>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">
+                    {{ format.formatToken(balanceItem) }}
+                  </div>
+                  <div class="text-xs">
+                    {{ format.calculatePercent(balanceItem.amount, totalAmount) }}
+                  </div>
+                </div>
+                <div
+                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
+                >
+                  <span
+                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
+                  ></span>
+                  ${{ format.tokenValue(balanceItem) }}                
+                </div>
+              </div>
+            </template>
             <!--delegations  -->
             <div
               class="flex items-center px-4 mb-2"
@@ -334,6 +490,9 @@ function mapAmount(events:{type: string, attributes: {key: string, value: string
           </div>
           <div class="mt-4 text-lg font-semibold mr-5 pl-5 border-t pt-4 text-right">
             {{ $t('account.total_value') }}: ${{ totalValue }}
+            <div v-if="isVestingAccount" class="text-sm font-normal text-warning mt-1">
+              * {{ vestingPercentage.toFixed(2) }}% of tokens vested
+            </div>
           </div>
         </div>
       </div>

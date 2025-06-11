@@ -59,24 +59,17 @@ const totalAmountByCategory = computed(() => {
     });
   });
   
-  // For vesting accounts, split balance into locked and unlocked
+  // For vesting accounts, split balance into spendable (immediately usable) and vesting (locked)
   if (isVestingAccount.value) {
-    let sumSpendable = 0;
-    let sumLocked = 0;
+    // Spendable = spendable balance (what can actually be used immediately)
+    const spendableAmount = Number(spendableBalances.value?.[0]?.amount || 0);
     
-    spendableBalances.value?.forEach((spendableItem, index) => {
-      const totalItem = balances.value[index];
-      if (totalItem) {
-        const spendableAmount = Number(spendableItem.amount);
-        const totalAmount = Number(totalItem.amount);
-        sumSpendable += spendableAmount;
-        sumLocked += (totalAmount - spendableAmount);
-      }
-    });
+    // Vesting = theoretical locked amount based on vesting schedules
+    const vestingAmount = totalOriginalVesting.value - theoreticalVestedAmount.value;
     
-    return [sumSpendable, sumLocked, sumDel, sumRew, sumUn];
+    return [spendableAmount, sumDel, sumRew, sumUn, vestingAmount];
   } else {
-    // For regular accounts, show total balance
+    // For regular accounts, show total balance as spendable (no vesting locks)
     let sumBal = 0;
     balances.value?.forEach((x) => {
       sumBal += Number(x.amount);
@@ -87,9 +80,9 @@ const totalAmountByCategory = computed(() => {
 
 const labels = computed(() => {
   if (isVestingAccount.value) {
-    return ['Liquid', 'Vesting', 'Delegation', 'Reward', 'Unbonding'];
+    return ['Balance', 'Delegated', 'Rewards', 'Unbonding', 'Vesting'];
   } else {
-    return ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+    return ['Balance', 'Delegated', 'Rewards', 'Unbonding'];
   }
 });
 
@@ -105,7 +98,6 @@ const totalValue = computed(() => {
   rewards.value?.total?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
-  // Always use total balances for value calculation, regardless of vesting account status
   balances.value?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
@@ -556,14 +548,10 @@ function detectVestingAccount(account: AuthAccount): boolean {
           <!-- list-->
           <div class="">
             <!--balances  -->
-            <!-- For vesting accounts, show balance and locked amount -->
+            <!-- For vesting accounts, show spendable and vesting amounts -->
             <template v-if="isVestingAccount">
-              <!-- Total Balance -->
-              <div
-                class="flex items-center px-4 mb-2"
-                v-for="(balanceItem, index) in balances"
-                :key="index"
-              >
+              <!-- Spendable (Available) Balance -->
+              <div class="flex items-center px-4 mb-2">
                 <div
                   class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
                 >
@@ -574,10 +562,13 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 </div>
                 <div class="flex-1">
                   <div class="text-sm font-semibold">
-                    {{ format.formatToken(balanceItem) }}
+                    {{ format.formatToken({
+                      amount: String(totalAmountByCategory[0]),
+                      denom: balances[0]?.denom || 'FUEL'
+                    }) }} <span class="text-xs text-info">Spendable</span>
                   </div>
                   <div class="text-xs">
-                    {{ format.calculatePercent(balanceItem.amount, totalAmount) }}
+                    {{ format.calculatePercent(totalAmountByCategory[0], totalAmount) }}
                   </div>
                 </div>
                 <div
@@ -586,16 +577,15 @@ function detectVestingAccount(account: AuthAccount): boolean {
                   <span
                     class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
                   ></span>
-                  ${{ format.tokenValue(balanceItem) }}                
+                  ${{ format.tokenValue({
+                    amount: String(totalAmountByCategory[0]),
+                    denom: balances[0]?.denom || 'FUEL'
+                  }) }}
                 </div>
               </div>
               
               <!-- Vesting (Locked) Balance -->
-              <div
-                class="flex items-center px-4 mb-2"
-                v-for="(balanceItem, index) in balances"
-                :key="'locked-' + index"
-              >
+              <div class="flex items-center px-4 mb-2">
                 <div
                   class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
                 >
@@ -607,12 +597,12 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 <div class="flex-1">
                   <div class="text-sm font-semibold">
                     {{ format.formatToken({
-                      amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
-                      denom: balanceItem.denom
-                    }) }} <span class="text-xs text-warning">Vesting (Locked)</span>
+                      amount: String(totalAmountByCategory[4]),
+                      denom: balances[0]?.denom || 'FUEL'
+                    }) }} <span class="text-xs text-warning">Vesting</span>
                   </div>
-                  <div class="text-xs text-warning">
-                    Still vesting, will unlock over time
+                  <div class="text-xs">
+                    {{ format.calculatePercent(totalAmountByCategory[4], totalAmount) }}
                   </div>
                 </div>
                 <div
@@ -622,9 +612,9 @@ function detectVestingAccount(account: AuthAccount): boolean {
                     class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
                   ></span>
                   ${{ format.tokenValue({
-                      amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
-                      denom: balanceItem.denom
-                    }) }}                
+                    amount: String(totalAmountByCategory[4]),
+                    denom: balances[0]?.denom || 'FUEL'
+                  }) }}
                 </div>
               </div>
             </template>
@@ -646,7 +636,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 </div>
                 <div class="flex-1">
                   <div class="text-sm font-semibold">
-                    {{ format.formatToken(balanceItem) }}
+                    {{ format.formatToken(balanceItem) }} <span class="text-xs text-info">Spendable</span>
                   </div>
                   <div class="text-xs">
                     {{ format.calculatePercent(balanceItem.amount, totalAmount) }}
@@ -678,7 +668,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
               </div>
               <div class="flex-1">
                 <div class="text-sm font-semibold">
-                  {{ format.formatToken(delegationItem?.balance) }}
+                  {{ format.formatToken(delegationItem?.balance) }} <span class="text-xs text-warning">Delegated</span>
                 </div>
                 <div class="text-xs">
                   {{
@@ -718,7 +708,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
               </div>
               <div class="flex-1">
                 <div class="text-sm font-semibold">
-                  {{ format.formatToken(rewardItem) }}
+                  {{ format.formatToken(rewardItem) }} <span class="text-xs text-success">Rewards</span>
                 </div>
                 <div class="text-xs">{{ format.calculatePercent(rewardItem.amount, totalAmount) }}</div>
               </div>
@@ -752,7 +742,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
                       amount: String(unbondingTotal),
                       denom: stakingStore.params.bond_denom,
                     })
-                  }}
+                  }} <span class="text-xs text-error">Unbonding</span>
                 </div>
                 <div class="text-xs">
                   {{ format.calculatePercent(unbondingTotal, totalAmount) }}

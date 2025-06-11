@@ -17,8 +17,9 @@ import type {
   TxResponse,
   DelegatorRewards,
   UnbondingResponses,
+  VestingInfo,
+  Coin,
 } from '@/types';
-import type { Coin } from '@cosmjs/amino';
 import Countdown from '@/components/Countdown.vue';
 import { fromBase64 } from '@cosmjs/encoding';
 
@@ -122,7 +123,44 @@ const vestingPercentage = computed(() => {
     return 0;
   }
   
-  // For vesting accounts, calculate based on original vesting schedule and time
+  const accountType = account.value['@type'] || '';
+  
+  // Handle EthOwnedMultiContinuousVestingAccount with multiple vesting schedules
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    const currentTime = Math.floor(Date.now() / 1000);
+    let totalOriginalVesting = 0;
+    let totalVestedAmount = 0;
+    
+    // Calculate weighted vesting percentage across all schedules
+    account.value.infos.forEach((info) => {
+      const originalVesting = Number(info.original_vesting?.[0]?.amount || 0);
+      const startTime = Number(info.start_time || 0);
+      const endTime = Number(info.end_time || 0);
+      
+      if (originalVesting > 0 && startTime < endTime) {
+        totalOriginalVesting += originalVesting;
+        
+        // Calculate vested amount for this schedule
+        if (currentTime <= startTime) {
+          // Vesting hasn't started for this schedule
+          // totalVestedAmount += 0;
+        } else if (currentTime >= endTime) {
+          // Vesting completed for this schedule
+          totalVestedAmount += originalVesting;
+        } else {
+          // Linear vesting progress for this schedule
+          const vestedTime = currentTime - startTime;
+          const totalVestingTime = endTime - startTime;
+          totalVestedAmount += originalVesting * (vestedTime / totalVestingTime);
+        }
+      }
+    });
+    
+    if (totalOriginalVesting === 0) return 0;
+    return (totalVestedAmount / totalOriginalVesting) * 100;
+  }
+  
+  // Handle single vesting schedule (EthOwnedContinuousVestingAccount)
   if (account.value.vesting_account) {
     const vestingAccount = account.value.vesting_account;
     const currentTime = Math.floor(Date.now() / 1000); // Current timestamp in seconds
@@ -159,29 +197,217 @@ const vestingPercentage = computed(() => {
 
 // Calculate theoretical vested amount based on vesting schedule (time-based)
 const theoreticalVestedAmount = computed(() => {
-  if (!isVestingAccount.value || !account.value?.vesting_account) {
+  if (!isVestingAccount.value || !account.value) {
     return 0;
   }
   
-  const vestingAccount = account.value.vesting_account;
-  const currentTime = Math.floor(Date.now() / 1000);
-  const startTime = Number(vestingAccount.start_time || 0);
-  const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
-  const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+  const accountType = account.value['@type'] || '';
   
-  if (originalVesting === 0 || startTime >= endTime) return 0;
-  
-  // Calculate what should be vested based on time
-  if (currentTime <= startTime) {
-    return 0; // Vesting hasn't started
-  } else if (currentTime >= endTime) {
-    return originalVesting; // Vesting completed
-  } else {
-    // Linear vesting progress
-    const vestedTime = currentTime - startTime;
-    const totalVestingTime = endTime - startTime;
-    return Math.floor(originalVesting * (vestedTime / totalVestingTime));
+  // Handle EthOwnedMultiContinuousVestingAccount with multiple vesting schedules
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    const currentTime = Math.floor(Date.now() / 1000);
+    let totalVestedAmount = 0;
+    
+    // Sum vested amounts across all schedules
+    account.value.infos.forEach((info) => {
+      const originalVesting = Number(info.original_vesting?.[0]?.amount || 0);
+      const startTime = Number(info.start_time || 0);
+      const endTime = Number(info.end_time || 0);
+      
+      if (originalVesting > 0 && startTime < endTime) {
+        // Calculate vested amount for this schedule
+        if (currentTime <= startTime) {
+          // Vesting hasn't started for this schedule
+          // totalVestedAmount += 0;
+        } else if (currentTime >= endTime) {
+          // Vesting completed for this schedule
+          totalVestedAmount += originalVesting;
+        } else {
+          // Linear vesting progress for this schedule
+          const vestedTime = currentTime - startTime;
+          const totalVestingTime = endTime - startTime;
+          totalVestedAmount += Math.floor(originalVesting * (vestedTime / totalVestingTime));
+        }
+      }
+    });
+    
+    return totalVestedAmount;
   }
+  
+  // Handle single vesting schedule (EthOwnedContinuousVestingAccount)
+  if (account.value.vesting_account) {
+    const vestingAccount = account.value.vesting_account;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const startTime = Number(vestingAccount.start_time || 0);
+    const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
+    const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+    
+    if (originalVesting === 0 || startTime >= endTime) return 0;
+    
+    // Calculate what should be vested based on time
+    if (currentTime <= startTime) {
+      return 0; // Vesting hasn't started
+    } else if (currentTime >= endTime) {
+      return originalVesting; // Vesting completed
+    } else {
+      // Linear vesting progress
+      const vestedTime = currentTime - startTime;
+      const totalVestingTime = endTime - startTime;
+      return Math.floor(originalVesting * (vestedTime / totalVestingTime));
+    }
+  }
+  
+  return 0;
+});
+
+// Helper to get the primary denom from balances
+const primaryDenom = computed(() => {
+  return balances.value?.[0]?.denom || 'FUEL';
+});
+
+// Get detailed information about individual vesting schedules for multi-vesting accounts
+const vestingScheduleDetails = computed(() => {
+  if (!isVestingAccount.value || !account.value) {
+    return [];
+  }
+  
+  const accountType = account.value['@type'] || '';
+  
+  // Handle EthOwnedMultiContinuousVestingAccount with multiple vesting schedules
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    const currentTime = Math.floor(Date.now() / 1000);
+    
+    return account.value.infos.map((info, index) => {
+      const originalVesting = Number(info.original_vesting?.[0]?.amount || 0);
+      const startTime = Number(info.start_time || 0);
+      const endTime = Number(info.end_time || 0);
+      
+      let vestedAmount = 0;
+      let percentage = 0;
+      let status = 'Not Started';
+      
+      if (originalVesting > 0 && startTime < endTime) {
+        if (currentTime <= startTime) {
+          // Vesting hasn't started for this schedule
+          status = 'Not Started';
+          percentage = 0;
+        } else if (currentTime >= endTime) {
+          // Vesting completed for this schedule
+          status = 'Completed';
+          vestedAmount = originalVesting;
+          percentage = 100;
+        } else {
+          // Linear vesting progress for this schedule
+          status = 'Active';
+          const vestedTime = currentTime - startTime;
+          const totalVestingTime = endTime - startTime;
+          const progress = vestedTime / totalVestingTime;
+          vestedAmount = Math.floor(originalVesting * progress);
+          percentage = progress * 100;
+        }
+      }
+      
+      return {
+        index: index + 1,
+        originalVesting,
+        vestedAmount,
+        lockedAmount: originalVesting - vestedAmount,
+        startTime: new Date(startTime * 1000),
+        endTime: new Date(endTime * 1000),
+        percentage,
+        status,
+        denom: info.original_vesting?.[0]?.denom || primaryDenom.value
+      };
+    });
+  }
+  
+  // Handle single vesting schedule (EthOwnedContinuousVestingAccount)
+  if (account.value.vesting_account) {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const vestingAccount = account.value.vesting_account;
+    const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+    const startTime = Number(vestingAccount.start_time || 0);
+    const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
+    
+    let vestedAmount = 0;
+    let percentage = 0;
+    let status = 'Not Started';
+    
+    if (originalVesting > 0 && startTime < endTime) {
+      if (currentTime <= startTime) {
+        status = 'Not Started';
+        percentage = 0;
+      } else if (currentTime >= endTime) {
+        status = 'Completed';
+        vestedAmount = originalVesting;
+        percentage = 100;
+      } else {
+        status = 'Active';
+        const vestedTime = currentTime - startTime;
+        const totalVestingTime = endTime - startTime;
+        const progress = vestedTime / totalVestingTime;
+        vestedAmount = Math.floor(originalVesting * progress);
+        percentage = progress * 100;
+      }
+    }
+    
+    return [{
+      index: 1,
+      originalVesting,
+      vestedAmount,
+      lockedAmount: originalVesting - vestedAmount,
+      startTime: new Date(startTime * 1000),
+      endTime: new Date(endTime * 1000),
+      percentage,
+      status,
+      denom: vestingAccount.base_vesting_account?.original_vesting?.[0]?.denom || primaryDenom.value
+    }];
+  }
+  
+  return [];
+});
+
+// Check if this is a multi-vesting account
+const isMultiVestingAccount = computed(() => {
+  if (!account.value) return false;
+  const accountType = account.value['@type'] || '';
+  return accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos && account.value.infos.length > 1;
+});
+
+// Get number of vesting schedules for badge display
+const vestingScheduleCount = computed(() => {  
+  if (!isVestingAccount.value || !account.value) return 0;
+  
+  const accountType = account.value['@type'] || '';
+  
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    return account.value.infos.length;
+  }
+  
+  if (account.value.vesting_account) {
+    return 1;
+  }
+  
+  return 0;
+});
+
+// Get total original vesting amount across all schedules
+const totalOriginalVesting = computed(() => {
+  if (!isVestingAccount.value || !account.value) return 0;
+  
+  const accountType = account.value['@type'] || '';
+  
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    return account.value.infos.reduce((total, info) => {
+      return total + Number(info.original_vesting?.[0]?.amount || 0);
+    }, 0);
+  }
+  
+  if (account.value.vesting_account) {
+    return Number(account.value.vesting_account.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+  }
+  
+  return 0;
 });
 
 function loadAccount(address: string) {
@@ -277,8 +503,15 @@ function detectVestingAccount(account: AuthAccount): boolean {
           <span v-if="isVestingAccount" class="text-xs text-warning mt-1">
             <span class="badge badge-warning badge-sm mr-2">
               <Icon icon="mdi-lock-clock" class="mr-1" size="12" />
-              Vesting Account
-              <div class="tooltip tooltip-right" data-tip="This account has tokens that vest over time">
+              <span v-if="vestingScheduleCount > 1">
+                {{ vestingScheduleCount }} Vesting Schedules
+              </span>
+              <span v-else>
+                Vesting Account
+              </span>
+              <div class="tooltip tooltip-right" :data-tip="vestingScheduleCount > 1 ? 
+                'This account has multiple vesting schedules with different timelines' : 
+                'This account has tokens that vest over time'">
                 <Icon icon="mdi-information" class="ml-1 opacity-60" size="10" />
               </div>
             </span>
@@ -323,13 +556,13 @@ function detectVestingAccount(account: AuthAccount): boolean {
           <!-- list-->
           <div class="">
             <!--balances  -->
-            <!-- For vesting accounts, show liquid and locked balances -->
+            <!-- For vesting accounts, show balance and locked amount -->
             <template v-if="isVestingAccount">
-              <!-- Total Balance (Liquid + Locked) -->
+              <!-- Total Balance -->
               <div
                 class="flex items-center px-4 mb-2"
                 v-for="(balanceItem, index) in balances"
-                :key="'total-' + index"
+                :key="index"
               >
                 <div
                   class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
@@ -341,10 +574,10 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 </div>
                 <div class="flex-1">
                   <div class="text-sm font-semibold">
-                    {{ format.formatToken(balanceItem) }} <span class="text-xs opacity-75">(Total)</span>
+                    {{ format.formatToken(balanceItem) }}
                   </div>
-                  <div class="text-xs opacity-75">
-                    All tokens currently in this account
+                  <div class="text-xs">
+                    {{ format.calculatePercent(balanceItem.amount, totalAmount) }}
                   </div>
                 </div>
                 <div
@@ -357,39 +590,7 @@ function detectVestingAccount(account: AuthAccount): boolean {
                 </div>
               </div>
               
-              <!-- Liquid Balance (What's spendable now) -->
-              <div
-                class="flex items-center px-4 mb-2"
-                v-for="(spendableItem, index) in spendableBalances"
-                :key="'liquid-' + index"
-              >
-                <div
-                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
-                >
-                  <Icon icon="mdi-water" class="text-success" size="20" />
-                  <div
-                    class="absolute top-0 bottom-0 left-0 right-0 bg-success opacity-20"
-                  ></div>
-                </div>
-                <div class="flex-1">
-                  <div class="text-sm font-semibold">
-                    {{ format.formatToken(spendableItem) }} <span class="text-xs text-success">(Liquid)</span>
-                  </div>
-                  <div class="text-xs text-success">
-                    Available for transfer/delegation now
-                  </div>
-                </div>
-                <div
-                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
-                >
-                  <span
-                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
-                  ></span>
-                  ${{ format.tokenValue(spendableItem) }}                
-                </div>
-              </div>
-              
-              <!-- Locked Balance (Still Vesting) -->
+              <!-- Vesting (Locked) Balance -->
               <div
                 class="flex items-center px-4 mb-2"
                 v-for="(balanceItem, index) in balances"
@@ -422,44 +623,6 @@ function detectVestingAccount(account: AuthAccount): boolean {
                   ></span>
                   ${{ format.tokenValue({
                       amount: String(Number(balanceItem.amount) - Number((spendableBalances[index] || {amount: '0'}).amount)),
-                      denom: balanceItem.denom
-                    }) }}                
-                </div>
-              </div>
-              
-              <!-- Unlocked/Vesting (Theoretical vested amount based on time) -->
-              <div
-                class="flex items-center px-4 mb-2"
-                v-for="(balanceItem, index) in balances"
-                :key="'unlocked-' + index"
-              >
-                <div
-                  class="w-9 h-9 rounded overflow-hidden flex items-center justify-center relative mr-4"
-                >
-                  <Icon icon="mdi-clock-check" class="text-info" size="20" />
-                  <div
-                    class="absolute top-0 bottom-0 left-0 right-0 bg-info opacity-20"
-                  ></div>
-                </div>
-                <div class="flex-1">
-                  <div class="text-sm font-semibold">
-                    {{ format.formatToken({
-                      amount: String(theoreticalVestedAmount),
-                      denom: balanceItem.denom
-                    }) }} <span class="text-xs text-info">Vested (Unlocked)</span>
-                  </div>
-                  <div class="text-xs text-info">
-                    Made spendable by vesting schedule, may have been utilized
-                  </div>
-                </div>
-                <div
-                  class="text-xs truncate relative py-1 px-3 rounded-full w-fit text-primary dark:invert mr-2"
-                >
-                  <span
-                    class="inset-x-0 inset-y-0 opacity-10 absolute bg-primary dark:invert text-sm"
-                  ></span>
-                  ${{ format.tokenValue({
-                      amount: String(theoreticalVestedAmount),
                       denom: balanceItem.denom
                     }) }}                
                 </div>
@@ -609,9 +772,149 @@ function detectVestingAccount(account: AuthAccount): boolean {
           </div>
           <div class="mt-4 text-lg font-semibold mr-5 pl-5 border-t pt-4 text-right">
             {{ $t('account.total_value') }}: ${{ totalValue }}
-            <div v-if="isVestingAccount" class="text-sm font-normal text-warning mt-1">
-              * {{ vestingPercentage.toFixed(2) }}% of tokens vested
-            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vesting Schedules Details -->
+    <div v-if="isVestingAccount && vestingScheduleCount > 0" class="bg-base-100 px-4 pt-3 pb-4 rounded mb-4 shadow">
+      <div class="collapse collapse-arrow">
+        <input type="checkbox" class="collapse-toggle" />
+        <div class="collapse-title">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="card-title flex items-center flex-wrap gap-2">
+              <Icon icon="mdi-calendar-multiple" class="mr-2" size="20" />
+              Vesting Schedules
+              <span class="badge badge-info badge-outline badge-lg">{{ vestingScheduleCount }} schedule{{ vestingScheduleCount > 1 ? 's' : '' }}</span>
+              <!-- Summary Badges -->
+              <div class="badge badge-lg relative overflow-hidden text-white font-semibold" 
+                   :style="{
+                     background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestingPercentage}%, #374151 ${vestingPercentage}%, #374151 100%)`
+                   }">
+                <Icon icon="mdi-chart-line" class="mr-1" size="12" />
+                {{ vestingPercentage.toFixed(1) }}% vested
+              </div>
+              <div class="badge badge-success badge-outline badge-lg">
+                <Icon icon="mdi-check-circle" class="mr-1" size="12" />
+                {{ format.formatToken({
+                  amount: String(theoreticalVestedAmount),
+                  denom: primaryDenom
+                }) }} vested
+              </div>
+              <div class="badge badge-warning badge-outline badge-lg">
+                <Icon icon="mdi-lock" class="mr-1" size="12" />
+                {{ format.formatToken({
+                  amount: String(totalOriginalVesting - theoreticalVestedAmount),
+                  denom: primaryDenom
+                }) }} vesting
+              </div>
+              <div class="badge badge-info badge-outline badge-lg">
+                <Icon icon="mdi-sigma" class="mr-1" size="12" />
+                {{ format.formatToken({
+                  amount: String(totalOriginalVesting),
+                  denom: primaryDenom
+                }) }} total
+              </div>
+            </h2>
+          </div>
+        </div>
+        <div class="collapse-content">
+          <!-- Vesting Schedules Table -->
+          <div class="overflow-x-auto">
+            <table class="table table-zebra w-full text-sm">
+              <thead>
+                <tr>
+                  <th class="py-3">Schedule</th>
+                  <th class="py-3">Status</th>
+                  <th class="py-3">Progress</th>
+                  <th class="py-3">
+                    <div class="tooltip tooltip-bottom" data-tip="Amount of tokens that have been unlocked by the vesting schedule based on time elapsed">
+                      Vested
+                    </div>
+                  </th>
+                  <th class="py-3">
+                    <div class="tooltip tooltip-bottom" data-tip="Tokens still locked in the vesting schedule, will unlock over the remaining vesting period">
+                      Vesting
+                    </div>
+                  </th>
+                  <th class="py-3">Total</th>
+                  <th class="py-3">Weight</th>
+                  <th class="py-3">Start Date</th>
+                  <th class="py-3">End Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="schedule in vestingScheduleDetails" :key="'schedule-' + schedule.index">
+                  <td class="py-3">
+                    <div class="font-semibold">{{ schedule.index }}</div>
+                  </td>
+                  <td class="py-3">
+                    <span 
+                      class="badge badge-sm"
+                      :class="{
+                        'badge-success': schedule.status === 'Completed',
+                        'badge-warning': schedule.status === 'Active',
+                        'badge-neutral': schedule.status === 'Not Started'
+                      }"
+                    >
+                      {{ schedule.status }}
+                    </span>
+                  </td>
+                  <td class="py-3">
+                    <div class="flex items-center">
+                      <div class="w-16 bg-base-300 rounded-full h-2 mr-2">
+                        <div 
+                          class="h-2 rounded-full"
+                          :class="{
+                            'bg-success': schedule.status === 'Completed',
+                            'bg-warning': schedule.status === 'Active',
+                            'bg-neutral': schedule.status === 'Not Started'
+                          }"
+                          :style="{ width: schedule.percentage + '%' }"
+                        ></div>
+                      </div>
+                      <span class="text-xs">{{ schedule.percentage.toFixed(1) }}%</span>
+                    </div>
+                  </td>
+                  <td class="py-3">
+                    <div class="font-semibold text-success">
+                      {{ format.formatToken({
+                        amount: String(schedule.vestedAmount),
+                        denom: schedule.denom
+                      }) }}
+                    </div>
+                  </td>
+                  <td class="py-3">
+                    <div class="font-semibold text-warning">
+                      {{ format.formatToken({
+                        amount: String(schedule.lockedAmount),
+                        denom: schedule.denom
+                      }) }}
+                    </div>
+                  </td>
+                  <td class="py-3">
+                    <div class="font-semibold">
+                      {{ format.formatToken({
+                        amount: String(schedule.originalVesting),
+                        denom: schedule.denom
+                      }) }}
+                    </div>
+                  </td>
+                  <td class="py-3">
+                    <div class="font-semibold">
+                      {{ format.calculatePercent(schedule.originalVesting, totalOriginalVesting) }}
+                    </div>
+                  </td>
+                  <td class="py-3">
+                    <div class="text-xs">{{ format.toDay(schedule.startTime.toISOString(), 'short') }}</div>
+                  </td>
+                  <td class="py-3">
+                    <div class="text-xs">{{ format.toDay(schedule.endTime.toISOString(), 'short') }}</div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

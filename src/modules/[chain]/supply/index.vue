@@ -87,10 +87,10 @@ function pageload(p: number) {
       finalList.push(fuelRow)
     } else {
       finalList.push({
-        denom: "No fuel token found",
+        denom: "-",
         amount: "-",
         base: "-",
-        info: "-",
+        info: "No fuel token found",
         logo: undefined,
       })
     }

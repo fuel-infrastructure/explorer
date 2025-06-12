@@ -80,9 +80,9 @@ const totalAmountByCategory = computed(() => {
 
 const labels = computed(() => {
   if (isVestingAccount.value) {
-    return ['Balance', 'Delegation', 'Rewards', 'Unbonding', 'Vesting'];
+    return ['Balance', 'Delegation', 'Reward', 'Unbonding', 'Vesting'];
   } else {
-    return ['Balance', 'Delegation', 'Rewards', 'Unbonding'];
+    return ['Balance', 'Delegation', 'Reward', 'Unbonding'];
   }
 });
 

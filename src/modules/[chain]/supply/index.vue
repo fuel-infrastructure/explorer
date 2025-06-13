@@ -75,7 +75,7 @@ function pageload(p: number) {
     // always prepend initial supply row
     const initialSupplyRow = {
       denom: fuelRow?.denom || "FUEL",
-      amount: "10000000000000000000",
+      amount: "10000000000",
       base: fuelRow?.base || "fuel",
       info: "Initial supply of " + (fuelRow?.realInfo || "FUEL"),
       logo: fuelRow?.logo || "/logo.svg",

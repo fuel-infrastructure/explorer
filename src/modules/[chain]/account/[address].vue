@@ -260,9 +260,7 @@ const vestedPercentage = computed(() => {
 });
 
 // Helper to get the primary denom from balances
-const primaryDenom = computed(() => {
-  return balances.value?.[0]?.denom || 'FUEL';
-});
+const primaryDenom = computed(() => balances.value?.[0]?.denom);
 
 // Get detailed information about individual vesting schedules for multi-vesting accounts
 const vestingScheduleDetails = computed(() => {

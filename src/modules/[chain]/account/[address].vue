@@ -110,7 +110,7 @@ const totalValue = computed(() => {
 });
 
 // Calculate vesting percentage for vesting accounts
-const vestingPercentage = computed(() => {
+const vestedPercentage = computed(() => {
   if (!isVestingAccount.value || !account.value) {
     return 0;
   }
@@ -780,10 +780,10 @@ function detectVestingAccount(account: AuthAccount): boolean {
               <!-- Summary Badges -->
               <div class="badge badge-lg relative overflow-hidden text-white font-semibold" 
                    :style="{
-                     background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestingPercentage}%, #374151 ${vestingPercentage}%, #374151 100%)`
+                     background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestedPercentage}%, #374151 ${vestedPercentage}%, #374151 100%)`
                    }">
                 <Icon icon="mdi-chart-line" class="mr-1" size="12" />
-                {{ vestingPercentage.toFixed(1) }}% vested
+                {{ vestedPercentage.toFixed(1) }}% vested
               </div>
               <div class="badge badge-success badge-outline badge-lg">
                 <Icon icon="mdi-check-circle" class="mr-1" size="12" />

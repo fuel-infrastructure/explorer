@@ -106,9 +106,18 @@ const totalValue = computed(() => {
   rewards.value?.total?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
-  balances.value?.forEach((x) => {
-    value += format.tokenValueNumber(x);
-  });
+  
+  // For vesting accounts, use spendable balances for available amount
+  if (isVestingAccount.value) {
+    spendableBalances.value?.forEach((x) => {
+      value += format.tokenValueNumber(x);
+    });
+  } else {
+    balances.value?.forEach((x) => {
+      value += format.tokenValueNumber(x);
+    });
+  }
+  
   unbonding.value?.forEach((x) => {
     x.entries?.forEach((y) => {
       value += format.tokenValueNumber({amount: y.balance, denom: stakingStore.params.bond_denom});
@@ -381,12 +390,41 @@ const vestingScheduleCount = computed(() => {
   return 0;
 });
 
+// Separate function to load balances after we know the account type
+function loadBalances(address: string) {
+  // Always load regular balances
+  blockchain.rpc.getBankBalances(address).then((x) => {
+    balances.value = x.balances;
+    
+    // For vesting accounts, also load spendable balances
+    if (isVestingAccount.value) {
+      blockchain.rpc.getBankSpendableBalances(address).then((spendableResponse) => {
+        spendableBalances.value = spendableResponse.balances;
+      }).catch((error) => {
+        console.warn('Failed to load spendable balances for vesting account:', error);
+        // For vesting accounts, if spendable balances fail, use regular balances as a fallback
+        spendableBalances.value = x.balances;
+      });
+    } else {
+      // For non-vesting accounts, spendable balances are the same as regular balances
+      spendableBalances.value = x.balances;
+    }
+  }).catch((error) => {
+    console.error('Failed to load regular balances:', error);
+    balances.value = [];
+    spendableBalances.value = [];
+  });
+}
+
 function loadAccount(address: string) {
   blockchain.rpc.getAuthAccount(address).then((x) => {
     account.value = x.account;
     
     // Detect if this is a vesting account
     isVestingAccount.value = detectVestingAccount(x.account);
+    
+    // Load balances after we know the account type
+    loadBalances(address);
   });
   blockchain.rpc.getTxsBySender(address).then((x) => {
     txs.value = x.tx_responses;
@@ -396,20 +434,6 @@ function loadAccount(address: string) {
   });
   blockchain.rpc.getStakingDelegations(address).then((x) => {
     delegations.value = x.delegation_responses;
-  });
-  blockchain.rpc.getBankBalances(address).then((x) => {
-    balances.value = x.balances;
-    
-    // If this is a vesting account, also load spendable balances
-    if (isVestingAccount.value) {
-      blockchain.rpc.getBankSpendableBalances(address).then((spendableResponse) => {
-        spendableBalances.value = spendableResponse.balances;
-      }).catch((error) => {
-        console.warn('Failed to load spendable balances:', error);
-        // Fallback to regular balances if spendable balances fail
-        spendableBalances.value = x.balances;
-      });
-    }
   });
   blockchain.rpc.getStakingDelegatorUnbonding(address).then((x) => {
     unbonding.value = x.unbonding_responses;

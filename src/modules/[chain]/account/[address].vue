@@ -177,14 +177,16 @@ const vestedPercentage = computed(() => {
   
   // Fallback for other vesting account types - use balance comparison
   if (balances.value.length === 0 || spendableBalances.value.length === 0) {
-    return 0;
+    return undefined;
   }
+  
+  console.warn('Using spendable balance to calculate vesting percentage is not accurate. This is a fallback calculation that may not reflect the actual vesting schedule.');
   const totalAmount = Number(balances.value[0]?.amount || 0);
   const spendableAmount = Number(spendableBalances.value[0]?.amount || 0);
   
-  if (totalAmount === 0) return 0;
+  if (totalAmount === 0) return undefined;
   
-  return (spendableAmount / totalAmount) * 100;
+  return undefined; // Return undefined instead of potentially misleading percentage
 });
 
 // Calculate theoretical vested amount based on vesting schedule (time-based)
@@ -778,12 +780,17 @@ function detectVestingAccount(account: AuthAccount): boolean {
               Vesting Schedules
               <span class="badge badge-info badge-outline badge-lg">{{ vestingScheduleCount }} schedule{{ vestingScheduleCount > 1 ? 's' : '' }}</span>
               <!-- Summary Badges -->
-              <div class="badge badge-lg relative overflow-hidden text-white font-semibold" 
+              <div v-if="vestedPercentage !== undefined" 
+                   class="badge badge-lg relative overflow-hidden text-white font-semibold" 
                    :style="{
                      background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestedPercentage}%, #374151 ${vestedPercentage}%, #374151 100%)`
                    }">
                 <Icon icon="mdi-chart-line" class="mr-1" size="12" />
                 {{ vestedPercentage.toFixed(1) }}% vested
+              </div>
+              <div v-else class="badge badge-lg badge-warning">
+                <Icon icon="mdi-alert" class="mr-1" size="12" />
+                Vesting schedule not available
               </div>
               <div class="badge badge-success badge-outline badge-lg">
                 <Icon icon="mdi-check-circle" class="mr-1" size="12" />

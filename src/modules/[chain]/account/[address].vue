@@ -70,7 +70,7 @@ const totalAmountByCategory = computed(() => {
     const total = totalOriginalVesting.value;
     const vested = theoreticalVestedAmount.value;
     if (total !== undefined && vested !== undefined) {
-      vestingAmount = total - vested
+      let vestingAmount = total - vested
       return [spendableAmount, ...baseAmounts, vestingAmount]
     } else {
       return [spendableAmount, ...baseAmounts]

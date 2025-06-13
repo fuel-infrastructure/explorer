@@ -58,6 +58,8 @@ const totalAmountByCategory = computed(() => {
       sumUn += Number(y.balance);
     });
   });
+
+  let baseAmounts = [sumDel, sumRew, sumUn]
   
   // For vesting accounts, split balance into spendable (immediately usable) and vesting (locked)
   if (isVestingAccount.value) {
@@ -67,24 +69,28 @@ const totalAmountByCategory = computed(() => {
     // Vesting = theoretical locked amount based on vesting schedules
     const total = totalOriginalVesting.value;
     const vested = theoreticalVestedAmount.value;
-    const vestingAmount = (total !== undefined && vested !== undefined) ? total - vested : undefined;
-    
-    return [spendableAmount, sumDel, sumRew, sumUn, vestingAmount];
+    if (total !== undefined && vested !== undefined) {
+      vestingAmount = total - vested
+      return [spendableAmount, ...baseAmounts, vestingAmount]
+    } else {
+      return [spendableAmount, ...baseAmounts]
+    }
   } else {
     // For regular accounts, show total balance as spendable (no vesting locks)
     let sumBal = 0;
     balances.value?.forEach((x) => {
       sumBal += Number(x.amount);
     });
-    return [sumBal, sumDel, sumRew, sumUn];
+    return [sumBal, ...baseAmounts];
   }
 });
 
 const labels = computed(() => {
-  if (isVestingAccount.value) {
-    return ['Balance', 'Delegation', 'Reward', 'Unbonding', 'Vesting'];
+  const baseLabels = ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+  if (isVestingAccount.value && totalAmountByCategory.value.length === 5) {
+    return [...baseLabels, 'Vesting'];
   } else {
-    return ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+    return baseLabels;
   }
 });
 

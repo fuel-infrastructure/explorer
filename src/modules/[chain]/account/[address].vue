@@ -58,6 +58,8 @@ const totalAmountByCategory = computed(() => {
       sumUn += Number(y.balance);
     });
   });
+
+  let baseAmounts = [sumDel, sumRew, sumUn]
   
   // For vesting accounts, split balance into spendable (immediately usable) and vesting (locked)
   if (isVestingAccount.value) {
@@ -65,24 +67,30 @@ const totalAmountByCategory = computed(() => {
     const spendableAmount = Number(spendableBalances.value?.[0]?.amount || 0);
     
     // Vesting = theoretical locked amount based on vesting schedules
-    const vestingAmount = totalOriginalVesting.value - theoreticalVestedAmount.value;
-    
-    return [spendableAmount, sumDel, sumRew, sumUn, vestingAmount];
+    const total = totalOriginalVesting.value;
+    const vested = theoreticalVestedAmount.value;
+    if (total !== undefined && vested !== undefined) {
+      let vestingAmount = total - vested
+      return [spendableAmount, ...baseAmounts, vestingAmount]
+    } else {
+      return [spendableAmount, ...baseAmounts]
+    }
   } else {
     // For regular accounts, show total balance as spendable (no vesting locks)
     let sumBal = 0;
     balances.value?.forEach((x) => {
       sumBal += Number(x.amount);
     });
-    return [sumBal, sumDel, sumRew, sumUn];
+    return [sumBal, ...baseAmounts];
   }
 });
 
 const labels = computed(() => {
-  if (isVestingAccount.value) {
-    return ['Balance', 'Delegation', 'Reward', 'Unbonding', 'Vesting'];
+  const baseLabels = ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+  if (isVestingAccount.value && totalAmountByCategory.value.length === 5) {
+    return [...baseLabels, 'Vesting'];
   } else {
-    return ['Balance', 'Delegation', 'Reward', 'Unbonding'];
+    return baseLabels;
   }
 });
 
@@ -98,9 +106,18 @@ const totalValue = computed(() => {
   rewards.value?.total?.forEach((x) => {
     value += format.tokenValueNumber(x);
   });
-  balances.value?.forEach((x) => {
-    value += format.tokenValueNumber(x);
-  });
+  
+  // For vesting accounts, use spendable balances for available amount
+  if (isVestingAccount.value) {
+    spendableBalances.value?.forEach((x) => {
+      value += format.tokenValueNumber(x);
+    });
+  } else {
+    balances.value?.forEach((x) => {
+      value += format.tokenValueNumber(x);
+    });
+  }
+  
   unbonding.value?.forEach((x) => {
     x.entries?.forEach((y) => {
       value += format.tokenValueNumber({amount: y.balance, denom: stakingStore.params.bond_denom});
@@ -109,96 +126,44 @@ const totalValue = computed(() => {
   return format.formatNumber(value, '0,0.00');
 });
 
-// Calculate vesting percentage for vesting accounts
-const vestingPercentage = computed(() => {
-  if (!isVestingAccount.value || !account.value) {
-    return 0;
+// Helper function to calculate vested amount for a single schedule
+function calculateVestedAmount(
+  originalVesting: number,
+  startTime: number,
+  endTime: number,
+  currentTime: number
+): number | undefined {
+  // Validate schedule parameters
+  if (originalVesting <= 0 || startTime >= endTime) {
+    return undefined;
   }
-  
-  const accountType = account.value['@type'] || '';
-  
-  // Handle EthOwnedMultiContinuousVestingAccount with multiple vesting schedules
-  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
-    const currentTime = Math.floor(Date.now() / 1000);
-    let totalOriginalVesting = 0;
-    let totalVestedAmount = 0;
-    
-    // Calculate weighted vesting percentage across all schedules
-    account.value.infos.forEach((info) => {
-      const originalVesting = Number(info.original_vesting?.[0]?.amount || 0);
-      const startTime = Number(info.start_time || 0);
-      const endTime = Number(info.end_time || 0);
-      
-      if (originalVesting > 0 && startTime < endTime) {
-        totalOriginalVesting += originalVesting;
-        
-        // Calculate vested amount for this schedule
-        if (currentTime <= startTime) {
-          // Vesting hasn't started for this schedule
-          // totalVestedAmount += 0;
-        } else if (currentTime >= endTime) {
-          // Vesting completed for this schedule
-          totalVestedAmount += originalVesting;
-        } else {
-          // Linear vesting progress for this schedule
-          const vestedTime = currentTime - startTime;
-          const totalVestingTime = endTime - startTime;
-          totalVestedAmount += originalVesting * (vestedTime / totalVestingTime);
-        }
-      }
-    });
-    
-    if (totalOriginalVesting === 0) return 0;
-    return (totalVestedAmount / totalOriginalVesting) * 100;
+
+  // Calculate vested amount based on time
+  if (currentTime <= startTime) {
+    return 0; // Vesting hasn't started
+  } else if (currentTime >= endTime) {
+    return originalVesting; // Vesting completed
+  } else {
+    // Linear vesting progress
+    const vestedTime = currentTime - startTime;
+    const totalVestingTime = endTime - startTime;
+    return originalVesting * (vestedTime / totalVestingTime);
   }
-  
-  // Handle single vesting schedule (EthOwnedContinuousVestingAccount)
-  if (account.value.vesting_account) {
-    const vestingAccount = account.value.vesting_account;
-    const currentTime = Math.floor(Date.now() / 1000); // Current timestamp in seconds
-    const startTime = Number(vestingAccount.start_time || 0);
-    const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
-    const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
-    
-    if (originalVesting === 0 || startTime >= endTime) return 0;
-    
-    // Calculate vesting progress based on time (not current balances)
-    if (currentTime <= startTime) {
-      return 0; // Vesting hasn't started
-    } else if (currentTime >= endTime) {
-      return 100; // Vesting completed
-    } else {
-      // Linear vesting progress
-      const vestedTime = currentTime - startTime;
-      const totalVestingTime = endTime - startTime;
-      return (vestedTime / totalVestingTime) * 100;
-    }
-  }
-  
-  // Fallback for other vesting account types - use balance comparison
-  if (balances.value.length === 0 || spendableBalances.value.length === 0) {
-    return 0;
-  }
-  const totalAmount = Number(balances.value[0]?.amount || 0);
-  const spendableAmount = Number(spendableBalances.value[0]?.amount || 0);
-  
-  if (totalAmount === 0) return 0;
-  
-  return (spendableAmount / totalAmount) * 100;
-});
+}
 
 // Calculate theoretical vested amount based on vesting schedule (time-based)
 const theoreticalVestedAmount = computed(() => {
   if (!isVestingAccount.value || !account.value) {
-    return 0;
+    return undefined;
   }
   
   const accountType = account.value['@type'] || '';
+  const currentTime = Math.floor(Date.now() / 1000);
   
   // Handle EthOwnedMultiContinuousVestingAccount with multiple vesting schedules
   if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
-    const currentTime = Math.floor(Date.now() / 1000);
     let totalVestedAmount = 0;
+    let hasValidSchedule = true;
     
     // Sum vested amounts across all schedules
     account.value.infos.forEach((info) => {
@@ -206,56 +171,96 @@ const theoreticalVestedAmount = computed(() => {
       const startTime = Number(info.start_time || 0);
       const endTime = Number(info.end_time || 0);
       
-      if (originalVesting > 0 && startTime < endTime) {
-        // Calculate vested amount for this schedule
-        if (currentTime <= startTime) {
-          // Vesting hasn't started for this schedule
-          // totalVestedAmount += 0;
-        } else if (currentTime >= endTime) {
-          // Vesting completed for this schedule
-          totalVestedAmount += originalVesting;
-        } else {
-          // Linear vesting progress for this schedule
-          const vestedTime = currentTime - startTime;
-          const totalVestingTime = endTime - startTime;
-          totalVestedAmount += Math.floor(originalVesting * (vestedTime / totalVestingTime));
-        }
+      const vestedAmount = calculateVestedAmount(originalVesting, startTime, endTime, currentTime);
+      if (vestedAmount !== undefined) {
+        totalVestedAmount += vestedAmount;
+      } else {
+        hasValidSchedule = false;
+        return;
       }
     });
     
-    return totalVestedAmount;
+    return hasValidSchedule ? totalVestedAmount : undefined;
   }
   
   // Handle single vesting schedule (EthOwnedContinuousVestingAccount)
   if (account.value.vesting_account) {
     const vestingAccount = account.value.vesting_account;
-    const currentTime = Math.floor(Date.now() / 1000);
     const startTime = Number(vestingAccount.start_time || 0);
     const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
     const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
     
-    if (originalVesting === 0 || startTime >= endTime) return 0;
-    
-    // Calculate what should be vested based on time
-    if (currentTime <= startTime) {
-      return 0; // Vesting hasn't started
-    } else if (currentTime >= endTime) {
-      return originalVesting; // Vesting completed
-    } else {
-      // Linear vesting progress
-      const vestedTime = currentTime - startTime;
-      const totalVestingTime = endTime - startTime;
-      return Math.floor(originalVesting * (vestedTime / totalVestingTime));
-    }
+    return calculateVestedAmount(originalVesting, startTime, endTime, currentTime);
   }
   
-  return 0;
+  return undefined;
+});
+
+// Get total original vesting amount across all schedules
+const totalOriginalVesting = computed(() => {
+  if (!isVestingAccount.value || !account.value) {
+    return undefined;
+  }
+  
+  const accountType = account.value['@type'] || '';
+  
+  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
+    let total = 0;
+    let hasValidSchedule = true;
+    
+    account.value.infos.forEach((info) => {
+      const originalVesting = Number(info.original_vesting?.[0]?.amount || 0);
+      const startTime = Number(info.start_time || 0);
+      const endTime = Number(info.end_time || 0);
+      
+      if (originalVesting > 0 && startTime < endTime) {
+        total += originalVesting;
+      } else {
+        hasValidSchedule = false;
+        return;
+      }
+    });
+    
+    return hasValidSchedule ? total : undefined;
+  }
+  
+  if (account.value.vesting_account) {
+    const vestingAccount = account.value.vesting_account;
+    const originalVesting = Number(vestingAccount.base_vesting_account?.original_vesting?.[0]?.amount || 0);
+    const startTime = Number(vestingAccount.start_time || 0);
+    const endTime = Number(vestingAccount.base_vesting_account?.end_time || 0);
+    
+    if (originalVesting === 0 || startTime >= endTime) return undefined;
+    return originalVesting;
+  }
+  
+  return undefined;
+});
+
+// Calculate vesting percentage for vesting accounts
+const vestedPercentage = computed(() => {
+  if (!isVestingAccount.value || !account.value) {
+    return undefined;
+  }
+  
+  const vested = theoreticalVestedAmount.value;
+  const total = totalOriginalVesting.value;
+  
+  // If either value is undefined, return undefined
+  if (vested === undefined || total === undefined) {
+    return undefined;
+  }
+  
+  // If total is 0, return 0 (not undefined)
+  if (total === 0) {
+    return 0;
+  }
+  
+  return (vested / total) * 100;
 });
 
 // Helper to get the primary denom from balances
-const primaryDenom = computed(() => {
-  return balances.value?.[0]?.denom || 'FUEL';
-});
+const primaryDenom = computed(() => balances.value?.[0]?.denom);
 
 // Get detailed information about individual vesting schedules for multi-vesting accounts
 const vestingScheduleDetails = computed(() => {
@@ -383,24 +388,31 @@ const vestingScheduleCount = computed(() => {
   return 0;
 });
 
-// Get total original vesting amount across all schedules
-const totalOriginalVesting = computed(() => {
-  if (!isVestingAccount.value || !account.value) return 0;
-  
-  const accountType = account.value['@type'] || '';
-  
-  if (accountType.includes('EthOwnedMultiContinuousVestingAccount') && account.value.infos) {
-    return account.value.infos.reduce((total, info) => {
-      return total + Number(info.original_vesting?.[0]?.amount || 0);
-    }, 0);
-  }
-  
-  if (account.value.vesting_account) {
-    return Number(account.value.vesting_account.base_vesting_account?.original_vesting?.[0]?.amount || 0);
-  }
-  
-  return 0;
-});
+// Separate function to load balances after we know the account type
+function loadBalances(address: string) {
+  // Always load regular balances
+  blockchain.rpc.getBankBalances(address).then((x) => {
+    balances.value = x.balances;
+    
+    // For vesting accounts, also load spendable balances
+    if (isVestingAccount.value) {
+      blockchain.rpc.getBankSpendableBalances(address).then((spendableResponse) => {
+        spendableBalances.value = spendableResponse.balances;
+      }).catch((error) => {
+        console.warn('Failed to load spendable balances for vesting account:', error);
+        // For vesting accounts, if spendable balances fail, use regular balances as a fallback
+        spendableBalances.value = x.balances;
+      });
+    } else {
+      // For non-vesting accounts, spendable balances are the same as regular balances
+      spendableBalances.value = x.balances;
+    }
+  }).catch((error) => {
+    console.error('Failed to load regular balances:', error);
+    balances.value = [];
+    spendableBalances.value = [];
+  });
+}
 
 function loadAccount(address: string) {
   blockchain.rpc.getAuthAccount(address).then((x) => {
@@ -408,6 +420,9 @@ function loadAccount(address: string) {
     
     // Detect if this is a vesting account
     isVestingAccount.value = detectVestingAccount(x.account);
+    
+    // Load balances after we know the account type
+    loadBalances(address);
   });
   blockchain.rpc.getTxsBySender(address).then((x) => {
     txs.value = x.tx_responses;
@@ -417,20 +432,6 @@ function loadAccount(address: string) {
   });
   blockchain.rpc.getStakingDelegations(address).then((x) => {
     delegations.value = x.delegation_responses;
-  });
-  blockchain.rpc.getBankBalances(address).then((x) => {
-    balances.value = x.balances;
-    
-    // If this is a vesting account, also load spendable balances
-    if (isVestingAccount.value) {
-      blockchain.rpc.getBankSpendableBalances(address).then((spendableResponse) => {
-        spendableBalances.value = spendableResponse.balances;
-      }).catch((error) => {
-        console.warn('Failed to load spendable balances:', error);
-        // Fallback to regular balances if spendable balances fail
-        spendableBalances.value = x.balances;
-      });
-    }
   });
   blockchain.rpc.getStakingDelegatorUnbonding(address).then((x) => {
     unbonding.value = x.unbonding_responses;
@@ -778,33 +779,41 @@ function detectVestingAccount(account: AuthAccount): boolean {
               Vesting Schedules
               <span class="badge badge-info badge-outline badge-lg">{{ vestingScheduleCount }} schedule{{ vestingScheduleCount > 1 ? 's' : '' }}</span>
               <!-- Summary Badges -->
-              <div class="badge badge-lg relative overflow-hidden text-white font-semibold" 
+              <div v-if="vestedPercentage !== undefined" 
+                   class="badge badge-lg relative overflow-hidden text-white font-semibold" 
                    :style="{
-                     background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestingPercentage}%, #374151 ${vestingPercentage}%, #374151 100%)`
+                     background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${vestedPercentage}%, #374151 ${vestedPercentage}%, #374151 100%)`
                    }">
                 <Icon icon="mdi-chart-line" class="mr-1" size="12" />
-                {{ vestingPercentage.toFixed(1) }}% vested
+                {{ vestedPercentage.toFixed(1) }}% vested
+              </div>
+              <div v-else class="badge badge-lg badge-warning">
+                <Icon icon="mdi-alert" class="mr-1" size="12" />
+                Vesting Progress N/A
               </div>
               <div class="badge badge-success badge-outline badge-lg">
                 <Icon icon="mdi-check-circle" class="mr-1" size="12" />
-                {{ format.formatToken({
-                  amount: String(theoreticalVestedAmount),
-                  denom: primaryDenom
-                }) }} vested
+                {{ theoreticalVestedAmount !== undefined ? 
+                  format.formatToken({
+                    amount: String(theoreticalVestedAmount),
+                    denom: primaryDenom
+                  }) + ' vested' : 'Total Vested N/A' }}
               </div>
               <div class="badge badge-warning badge-outline badge-lg">
                 <Icon icon="mdi-lock" class="mr-1" size="12" />
-                {{ format.formatToken({
-                  amount: String(totalOriginalVesting - theoreticalVestedAmount),
-                  denom: primaryDenom
-                }) }} vesting
+                {{ totalOriginalVesting !== undefined && theoreticalVestedAmount !== undefined ? 
+                  format.formatToken({
+                    amount: String(totalOriginalVesting - theoreticalVestedAmount),
+                    denom: primaryDenom
+                  }) + ' vesting' : 'Total Remaining Vesting N/A' }}
               </div>
               <div class="badge badge-info badge-outline badge-lg">
                 <Icon icon="mdi-sigma" class="mr-1" size="12" />
-                {{ format.formatToken({
-                  amount: String(totalOriginalVesting),
-                  denom: primaryDenom
-                }) }} total
+                {{ totalOriginalVesting !== undefined ? 
+                  format.formatToken({
+                    amount: String(totalOriginalVesting),
+                    denom: primaryDenom
+                  }) + " total": 'Total Vesting N/A' }}
               </div>
             </h2>
           </div>
@@ -893,7 +902,9 @@ function detectVestingAccount(account: AuthAccount): boolean {
                   </td>
                   <td class="py-3">
                     <div class="font-semibold">
-                      {{ format.calculatePercent(schedule.originalVesting, totalOriginalVesting) }}
+                      {{ totalOriginalVesting !== undefined ? 
+                        format.calculatePercent(schedule.originalVesting, totalOriginalVesting) : 
+                        'N/A' }}
                     </div>
                   </td>
                   <td class="py-3">

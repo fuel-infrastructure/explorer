@@ -153,7 +153,8 @@
       "PROPOSAL_STATUS_FAILED": "Fallido"
     },
     "upgrade_plan": "Plan de actualización",
-    "votes": "Votos"
+    "votes": "Votos",
+    "fallback_data_notice": "La consulta de todas las propuestas históricas falló debido a un problema conocido. Recurriendo a consultar propuestas individualmente."
   },
   "ibc": {
     "title": "Conexiones IBC",

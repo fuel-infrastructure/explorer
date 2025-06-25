@@ -153,7 +153,8 @@
       "PROPOSAL_STATUS_FAILED": "실패"
     },
     "upgrade_plan": "업그레이드 계획",
-    "votes": "투표"
+    "votes": "투표",
+    "fallback_data_notice": "알려진 문제로 인해 모든 히스토리 제안 조회가 실패했습니다. 개별 제안 조회로 전환합니다."
   },
   "ibc": {
     "title": "IBC 연결",

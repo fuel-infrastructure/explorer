@@ -4,6 +4,8 @@ import type { PageRequest, PaginatedProposals } from '@/types';
 import { LoadingStatus } from './useDashboard';
 import { useWalletStore } from './useWalletStore';
 import { reactive } from 'vue';
+import { GovProposalCache } from './govCache';
+import { GovFallback, type FallbackResult } from './govFallback';
 
 export const useGovStore = defineStore('govStore', {
   state: () => {
@@ -15,6 +17,7 @@ export const useGovStore = defineStore('govStore', {
       },
       proposals: {} as Record<string, PaginatedProposals>,
       loading: {} as Record<string, LoadingStatus>,
+      usingFallback: false,
     };
   },
   getters: {
@@ -31,18 +34,36 @@ export const useGovStore = defineStore('govStore', {
       this.fetchParams();
       this.fetchProposals('2');
     },
+
     async fetchProposals(status: string, pagination?: PageRequest) {
       //if (!this.loading[status]) {
       this.loading[status] = LoadingStatus.Loading;
-      const proposals = reactive(
-        await this.blockchain.rpc?.getGovProposals(status, pagination)
-      );
+
+      let proposals: PaginatedProposals;
+      try {
+        proposals = reactive(
+          await this.blockchain.rpc?.getGovProposals(status, pagination)
+        );
+        this.usingFallback = false;
+      } catch (error) {
+        console.warn('Batch proposals request failed, falling back to sequential search:', error);
+        const fallbackResult: FallbackResult = await GovFallback.fetchProposalsSequentially(
+          this.blockchain,
+          status,
+          { maxConsecutiveFailures: 3 }
+        );
+        proposals = fallbackResult;
+        this.usingFallback = fallbackResult.usingFallback;
+      }
+
+      // Cache the results
+      GovProposalCache.set(this.blockchain.chainName, status, proposals);
 
       //filter spam proposals
-      if(proposals?.proposals) {
+      if (proposals?.proposals) {
         proposals.proposals = proposals.proposals.filter((item) => {
           const title = item.content?.title || item.title || ""
-          return title.toLowerCase().indexOf("airdrop")===-1
+          return title.toLowerCase().indexOf("airdrop") === -1
         });
       }
 

@@ -153,7 +153,8 @@
       "PROPOSAL_STATUS_FAILED": "失敗"
     },
     "upgrade_plan": "アップグレード計画",
-    "votes": "票"
+    "votes": "票",
+    "fallback_data_notice": "既知の問題により、すべての履歴提案のクエリが失敗しました。個別のクエリに切り替えています。"
   },
   "ibc": {
     "title": "IBC接続",

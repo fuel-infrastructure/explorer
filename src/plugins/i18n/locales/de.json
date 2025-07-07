@@ -153,8 +153,7 @@
       "PROPOSAL_STATUS_FAILED": "Gescheitert"
     },
     "upgrade_plan": "Upgrade-Plan",
-    "votes": "Stimmen",
-    "fallback_data_notice": "Abfrage aller historischen Vorschläge aufgrund eines bekannten Problems fehlgeschlagen. Wechsel zu individuellen Vorschlagsabfragen."
+    "votes": "Stimmen"
   },
   "ibc": {
     "title": "IBC-Verbindungen",
